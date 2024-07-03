@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 contract EuroCupBetting {
 
@@ -9,11 +9,10 @@ contract EuroCupBetting {
     event GameResultSet(uint256 indexed matchId, uint8 result);
     event PrizeDistributed(address indexed winner, uint256 indexed matchId, uint256 amount);
 
-
     struct Category {
         uint16 categoryId;
         string name;
-        Match[] matches;
+        uint256[] matchIds;
     }
 
     struct Bet {
@@ -40,7 +39,7 @@ contract EuroCupBetting {
     mapping(uint16 => Category) public categories;
     mapping(uint16 => Bet) public bets;
     uint256 public matchCounter;
-    uint256 public categoryCounter;
+    uint16 public categoryCounter;
     uint256 public betCounter;
 
     constructor() {
@@ -52,79 +51,83 @@ contract EuroCupBetting {
         _;
     }
 
-    function AddManager(address addrs) public onlyManager {
+    function addManager(address addrs) public onlyManager {
         require(!isManager[addrs], "Already a manager");
         isManager[addrs] = true;
     }
 
-
-    function createCategory(string memory categoryName) public {
-        require(bytes(categoryName).length > 0, "categoryName can not be empty");
+    function createCategory(string memory categoryName) public onlyManager {
+        require(bytes(categoryName).length > 0, "Category name cannot be empty");
         categoryCounter++;
-        categories[categoryCounter] = Category({
-            categoryId: categoryCounter,
-            name: categoryName,
-            matches: new Match[](0)
-        });
+        Category storage category = categories[categoryCounter];
+        category.categoryId = categoryCounter;
+        category.name = categoryName;
+        emit CategoryCreated(categoryCounter, categoryName);
     }
 
-    function createMatch(uint16 memory categoryId, string memory _homeTeam, string memory _awayTeam) public {
-        require(categoryId > 0 && categoryId <= categoryCounter, "category does not exist");
+    function createMatch(uint16 categoryId, string memory homeTeam, string memory awayTeam) public onlyManager {
+        require(categoryId > 0 && categoryId <= categoryCounter, "Category does not exist");
         matchCounter++;
-        matches[matchCounter] = Match({
-            matchId: matchCounter,
-            homeTeam: _homeTeam,
-            awayTeam: _awayTeam,
-            result: 0, // 0 means result not declared
-            isResultDeclared: false,
-            bets: new Bet[](0)
-        });
-        categories[categoryId].matches.push(matches[matchCounter]);
+        Match storage newMatch = matches[matchCounter];
+        newMatch.matchId = matchCounter;
+        newMatch.homeTeam = homeTeam;
+        newMatch.awayTeam = awayTeam;
+        newMatch.result = 0; // 0 means result not declared
+        newMatch.isResultDeclared = false;
+        newMatch.totalBetAmount = 0;
+        categories[categoryId].matchIds.push(matchCounter);
+        emit MatchCreated(matchCounter, categoryId, homeTeam, awayTeam);
     }
 
-    function placeBet(uint256 _matchId, uint8 _prediction) public payable {
-        require(_matchId > 0 && _matchId <= matchCounter, "Match does not exist");
+    function placeBet(uint256 matchId, uint8 prediction) public payable {
+        require(matchId > 0 && matchId <= matchCounter, "Match does not exist");
         require(msg.value > 0, "Bet amount should be greater than zero");
-        require(_prediction <= 3, "Invalid prediction");
+        require(prediction <= 3, "Invalid prediction");
 
-        Match storage m = matches[_matchId];
+        Match storage m = matches[matchId];
         betCounter++;
         m.bets.push(Bet({
             betId: betCounter,
-            matchId: _matchId,
+            matchId: matchId,
             better: msg.sender,
             amount: msg.value,
-            prediction: _prediction
+            prediction: prediction
         }));
         m.totalBetAmount += msg.value;
         m.userBetIds[msg.sender] = betCounter;
+
+        emit BetPlaced(msg.sender, matchId, prediction, msg.value);
     }
 
-    function declareResult(uint256 _matchId, uint8 _result) public onlyManager {
-        require(_matchId <= matchCounter, "Match does not exist");
-        require(_result <= 3, "Invalid result");
+    function declareResult(uint256 matchId, uint8 result) public onlyManager {
+        require(matchId <= matchCounter, "Match does not exist");
+        require(result <= 3, "Invalid result");
 
-        Match storage m = matches[_matchId];
+        Match storage m = matches[matchId];
         require(!m.isResultDeclared, "Result already declared");
 
-        m.result = _result;
+        m.result = result;
         m.isResultDeclared = true;
+
+        emit GameResultSet(matchId, result);
 
         uint256 totalWinningAmount = 0;
 
         for (uint256 i = 0; i < m.bets.length; i++) {
-            if (m.bets[i].prediction == _result) {
+            if (m.bets[i].prediction == result) {
                 totalWinningAmount += m.bets[i].amount;
             }
         }
         uint256 totalLosingAmount = m.totalBetAmount - totalWinningAmount;
 
         for (uint256 i = 0; i < m.bets.length; i++) {
-            if (m.bets[i].prediction == _result) {
-                //losing money for winner proportionately
+            if (m.bets[i].prediction == result) {
+                // Losing money for winner proportionately
                 uint256 winAmount = totalLosingAmount * m.bets[i].amount / totalWinningAmount;
-                // add with the bet amount
-                payable(m.bets[i].better).transfer(m.bets[i].amount + winAmount);
+                // Add with the bet amount
+                uint256 prizeAmount = m.bets[i].amount + winAmount;
+                payable(m.bets[i].better).transfer(prizeAmount);
+                emit PrizeDistributed(m.bets[i].better, matchId, prizeAmount);
             }
         }
     }
