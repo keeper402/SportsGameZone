@@ -5,8 +5,8 @@ contract SportsBetting {
 
     event CategoryCreated(uint16 indexed categoryId, string name);
     event MatchCreated(uint256 indexed matchId, uint16 indexed categoryId, string homeTeam, string awayTeam);
-    event BetPlaced(address indexed better, uint256 indexed matchId, uint8 prediction, uint256 amount);
-    event GameResultSet(uint256 indexed matchId, uint8 result);
+    event BetPlaced(address indexed better, uint256 indexed matchId, MatchResult prediction, uint256 amount);
+    event GameResultSet(uint256 indexed matchId, MatchResult result);
     event PrizeDistributed(address indexed winner, uint256 indexed matchId, uint256 amount);
 
     struct Category {
@@ -15,33 +15,38 @@ contract SportsBetting {
         uint256[] matchIds;
     }
 
+    enum MatchResult {
+        Not_DECLARED, HOME_WIN, DRAW, AWAY_WIN
+    }
+
     struct Bet {
         uint256 betId;
         uint256 matchId;
         address better;
         uint256 amount;
-        uint8 prediction; // 0: Home Win, 1: Draw, 2: Away Win
+        MatchResult prediction;
     }
 
     struct Match {
         uint256 matchId;
         string homeTeam;
         string awayTeam;
-        uint8 result; // 0: Not Declared, 1: Home Win, 2: Draw, 3: Away Win
+        MatchResult result;
         bool isResultDeclared;
         uint256 totalBetAmount;
         Bet[] bets;
         mapping(address => uint256) userBetIds;
     }
 
+    //use MatchData for frontend
     struct MatchData {
         uint256 matchId;
         string homeTeam;
         string awayTeam;
-        uint8 result; // 0: Not Declared, 1: Home Win, 2: Draw, 3: Away Win
+        MatchResult result;
+        MatchResult userBet;
         bool isResultDeclared;
         uint256 totalBetAmount;
-
     }
 
     mapping(address => bool) public isManager;
@@ -82,19 +87,18 @@ contract SportsBetting {
         newMatch.matchId = matchCounter;
         newMatch.homeTeam = homeTeam;
         newMatch.awayTeam = awayTeam;
-        newMatch.result = 0; // 0 means result not declared
+        newMatch.result = MatchResult.Not_DECLARED;
         newMatch.isResultDeclared = false;
         newMatch.totalBetAmount = 0;
         categories[categoryId].matchIds.push(matchCounter);
         emit MatchCreated(matchCounter, categoryId, homeTeam, awayTeam);
     }
 
-    function placeBet(uint256 matchId, uint8 prediction) public payable {
+    function placeBet(uint256 matchId, MatchResult prediction) public payable {
         require(matchId > 0 && matchId <= matchCounter, "Match does not exist");
         require(msg.value > 0, "Bet amount should be greater than zero");
-        require(prediction <= 3, "Invalid prediction");
 
-        Match storage m = matches[matchId];
+        //create user bet
         betCounter++;
         Bet memory bet = Bet({
             betId: betCounter,
@@ -103,6 +107,8 @@ contract SportsBetting {
             amount: msg.value,
             prediction: prediction
         });
+        // add user bet in match
+        Match storage m = matches[matchId];
         m.bets.push(bet);
         bets[betCounter] = bet;
         m.userBetIds[msg.sender] = betCounter;
@@ -111,25 +117,32 @@ contract SportsBetting {
         emit BetPlaced(msg.sender, matchId, prediction, msg.value);
     }
 
-    function matchesInCategory(uint16 categoryId) public returns (MatchData[] memory) {
+    //for frontend,show all data in match bet page
+    function matchesInCategory(uint16 categoryId) public view returns (MatchData[] memory) {
         uint256[] memory matchIds = categories[categoryId].matchIds;
         MatchData[] memory res = new MatchData[](matchIds.length);
         for (uint i = 0; i < matchIds.length; i++) {
-            res[i] = toMatchData(matchIds[i]);
+            //find match
+            Match storage m = matches[matchIds[i]];
+            //find userBet in match
+            Bet memory userBet = bets[m.userBetIds[msg.sender]];
+            //to data for frontend
+            res[i] = toMatchData(matchIds[i], userBet.prediction);
         }
         return res;
     }
 
-    function userBetInMatch(uint256 matchId) public returns (Bet memory) {
+    //show user bet in specific match
+    function userBetInMatch(uint256 matchId) public view returns (Bet memory) {
         Match storage m = matches[matchId];
         require(m.matchId > 0, "match not exist");
         // test it, what will return if user have not bet
         return bets[m.userBetIds[msg.sender]];
     }
 
-    function declareResult(uint256 matchId, uint8 result) public onlyManager {
+    //use Chainlink Keepers to invoke this function when match result is declared
+    function declareResult(uint256 matchId, MatchResult result) public onlyManager {
         require(matchId <= matchCounter, "Match does not exist");
-        require(result <= 3, "Invalid result");
 
         Match storage m = matches[matchId];
         require(!m.isResultDeclared, "Result already declared");
@@ -160,12 +173,14 @@ contract SportsBetting {
         }
     }
 
-    function toMatchData(uint256 matchId) private returns (MatchData memory) {
+    //transfer match to frontend data
+    function toMatchData(uint256 matchId, MatchResult userBet) private view returns (MatchData memory) {
         Match storage m = matches[matchId];
         return MatchData({
             matchId: m.matchId,
             homeTeam: m.homeTeam,
             awayTeam: m.awayTeam,
+            userBet: userBet,
             result: m.result,
             isResultDeclared: m.isResultDeclared,
             totalBetAmount: m.totalBetAmount
