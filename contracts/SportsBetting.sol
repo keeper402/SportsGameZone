@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-contract EuroCupBetting {
+contract SportsBetting {
 
     event CategoryCreated(uint16 indexed categoryId, string name);
     event MatchCreated(uint256 indexed matchId, uint16 indexed categoryId, string homeTeam, string awayTeam);
@@ -34,10 +34,20 @@ contract EuroCupBetting {
         mapping(address => uint256) userBetIds;
     }
 
+    struct MatchData {
+        uint256 matchId;
+        string homeTeam;
+        string awayTeam;
+        uint8 result; // 0: Not Declared, 1: Home Win, 2: Draw, 3: Away Win
+        bool isResultDeclared;
+        uint256 totalBetAmount;
+
+    }
+
     mapping(address => bool) public isManager;
     mapping(uint256 => Match) public matches;
     mapping(uint16 => Category) public categories;
-    mapping(uint16 => Bet) public bets;
+    mapping(uint256 => Bet) public bets;
     uint256 public matchCounter;
     uint16 public categoryCounter;
     uint256 public betCounter;
@@ -86,17 +96,35 @@ contract EuroCupBetting {
 
         Match storage m = matches[matchId];
         betCounter++;
-        m.bets.push(Bet({
+        Bet memory bet = Bet({
             betId: betCounter,
             matchId: matchId,
             better: msg.sender,
             amount: msg.value,
             prediction: prediction
-        }));
-        m.totalBetAmount += msg.value;
+        });
+        m.bets.push(bet);
+        bets[betCounter] = bet;
         m.userBetIds[msg.sender] = betCounter;
+        m.totalBetAmount += msg.value;
 
         emit BetPlaced(msg.sender, matchId, prediction, msg.value);
+    }
+
+    function matchesInCategory(uint16 categoryId) public returns (MatchData[] memory) {
+        uint256[] memory matchIds = categories[categoryId].matchIds;
+        MatchData[] memory res = new MatchData[](matchIds.length);
+        for (uint i = 0; i < matchIds.length; i++) {
+            res[i] = toMatchData(matchIds[i]);
+        }
+        return res;
+    }
+
+    function userBetInMatch(uint256 matchId) public returns (Bet memory) {
+        Match storage m = matches[matchId];
+        require(m.matchId > 0, "match not exist");
+        // test it, what will return if user have not bet
+        return bets[m.userBetIds[msg.sender]];
     }
 
     function declareResult(uint256 matchId, uint8 result) public onlyManager {
@@ -130,5 +158,17 @@ contract EuroCupBetting {
                 emit PrizeDistributed(m.bets[i].better, matchId, prizeAmount);
             }
         }
+    }
+
+    function toMatchData(uint256 matchId) private returns (MatchData memory) {
+        Match storage m = matches[matchId];
+        return MatchData({
+            matchId: m.matchId,
+            homeTeam: m.homeTeam,
+            awayTeam: m.awayTeam,
+            result: m.result,
+            isResultDeclared: m.isResultDeclared,
+            totalBetAmount: m.totalBetAmount
+        });
     }
 }
